@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "voice-agent"
+version = "0.1.0"
+description = "工业园区语音 AI 访客登记系统（LiveKit Agents）"
+requires-python = ">=3.11"
+
+dependencies = [
+    # ── LiveKit Agents 核心 ──────────────────────────────
+    "livekit-agents>=0.12",
+    "livekit-plugins-openai>=0.10",       # demo profile：OpenAI Realtime / GPT / TTS
+    "livekit-plugins-silero>=0.7",        # VAD（端点检测，两套 profile 通用）
+
+    # ── china_landing profile 占位（国内 provider 接入后替换）──
+    # "livekit-plugins-<china-asr>",      # TODO: 国内 ASR plugin
+    # "livekit-plugins-<china-tts>",      # TODO: Qwen3-TTS plugin
+
+    # ── 数据层 ───────────────────────────────────────────
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.20",                    # demo SQLite 异步驱动
+    "asyncpg>=0.29",                      # production PostgreSQL 异步驱动
+
+    # ── 配置 ─────────────────────────────────────────────
+    "pydantic-settings>=2.0",
+
+    # ── HTTP（企业微信 Webhook 推送）─────────────────────
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+voice-agent = "src.agent.worker:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
