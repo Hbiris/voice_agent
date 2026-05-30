@@ -73,25 +73,32 @@ cp .env.example .env
 # 编辑 .env：填写 LIVEKIT_* 和 OPENAI_API_KEY（demo profile）
 ```
 
-### 3. 配置 SIP Trunk（一次性）
+### 3. 配置 SIP Dispatch Rule（一次性）
 
-**demo — LiveKit Phone Numbers（推荐，最快）**
-1. 在 LiveKit Cloud 控制台申请一个电话号码（Phone Numbers → Buy Number）
-2. 运行配置脚本：
-   ```bash
-   python scripts/setup_sip_trunk.py --provider livekit
-   # 脚本会自动读取 .env 中的 TWILIO_PHONE_NUMBER / LIVEKIT 凭证
-   ```
+**demo — LiveKit Phone Numbers（推荐，零配置最快）**
 
-**demo — Twilio Elastic SIP Trunk（备选）**
-1. 在 Twilio 控制台创建 Elastic SIP Trunk，设置 Origination URI 指向 LiveKit SIP 地址
-2. 将 Twilio 号码填入 `.env` 的 `TWILIO_PHONE_NUMBER`
-3. `python scripts/setup_sip_trunk.py --provider twilio`
+LiveKit 托管号不需要自建 inbound trunk。号码在 LiveKit Cloud 控制台购买后，只需创建一条 dispatch rule 把来电路由到 `visitor-agent`：
 
-查看已创建的 trunk 和 rule：
+```bash
+python scripts/setup_sip_trunk.py           # --provider livekit 是默认值
+# 输出：INFO created dispatch rule (managed): id=SDR_xxx  agent=visitor-agent
+```
+
+> 如果 dashboard 里已手动建过 dispatch rule，跳过此步；若脚本误建了重复规则，用 `--cleanup` 清理：
+> ```bash
+> python scripts/setup_sip_trunk.py --cleanup --yes
+> ```
+
+查看当前状态：
 ```bash
 python scripts/setup_sip_trunk.py --list
 ```
+目标状态：**0 个自建 trunk + 1 条指向 `visitor-agent` 的 dispatch rule**。
+
+**demo — Twilio Elastic SIP Trunk（备选，自带号码）**
+1. 在 Twilio 控制台创建 Elastic SIP Trunk，Origination URI 指向 LiveKit SIP 地址
+2. 将号码填入 `.env` 的 `TWILIO_PHONE_NUMBER`
+3. `python scripts/setup_sip_trunk.py --provider twilio`
 
 **china_landing — 阿里云 SIP（落地时替换）**
 见 [src/telephony/trunks/aliyun.md](src/telephony/trunks/aliyun.md)，`--provider aliyun`

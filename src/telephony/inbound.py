@@ -1,5 +1,10 @@
 """
-SIP 来电接入：创建 inbound trunk + dispatch rule。
+SIP 来电接入：创建 / 删除 inbound trunk + dispatch rule。
+
+两条路径：
+  --provider livekit  (默认): LiveKit 托管号，无需 trunk，只建 dispatch rule
+  --provider twilio / aliyun : 自带号码，需先建 trunk 再建 dispatch rule
+
 运行一次（非启动时热路径）：python scripts/setup_sip_trunk.py
 """
 import logging
@@ -16,6 +21,8 @@ from livekit.api import (
     RoomAgentDispatch,
     ListSIPInboundTrunkRequest,
     ListSIPDispatchRuleRequest,
+    DeleteSIPTrunkRequest,
+    DeleteSIPDispatchRuleRequest,
 )
 
 logger = logging.getLogger(__name__)
@@ -35,9 +42,46 @@ TWILIO_SIP_IPS: list[str] = [
 ]
 
 # ── 阿里云 SIP 信令 IP（china_landing 落地时填入）────────────────────────────
-# TODO (china_landing): 从阿里云文档获取实际 IP 段并填入此列表。
-# 参考文档：https://help.aliyun.com/product/30071.html（云通信语音服务）
-ALIYUN_SIP_IPS: list[str] = []  # TODO: fill before china_landing deployment
+# TODO (china_landing): 从阿里云文档获取实际 IP 段并填入。
+ALIYUN_SIP_IPS: list[str] = []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 创建操作
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def create_dispatch_rule_managed(
+    lkapi: Any,
+    agent_name: str = "visitor-agent",
+    room_prefix: str = "call-",
+) -> Any:
+    """
+    LiveKit 托管号路径：创建 dispatch rule，trunk_ids=[] 匹配所有托管号来电。
+    不创建 trunk — LiveKit Phone Numbers 自动处理路由。
+    """
+    rule_info = SIPDispatchRuleInfo(
+        name="visitor-dispatch",
+        trunk_ids=[],  # 空 = 匹配所有托管号，无需指定 trunk
+        rule=SIPDispatchRule(
+            dispatch_rule_individual=SIPDispatchRuleIndividual(
+                room_prefix=room_prefix,
+                pin="",
+            )
+        ),
+        room_config=RoomConfiguration(
+            agents=[
+                RoomAgentDispatch(
+                    agent_name=agent_name,
+                    metadata='{"source":"sip"}',
+                )
+            ]
+        ),
+    )
+    response = await lkapi.sip.create_sip_dispatch_rule(
+        CreateSIPDispatchRuleRequest(dispatch_rule=rule_info)
+    )
+    logger.info("created dispatch rule (managed): id=%s  agent=%s", response.sip_dispatch_rule_id, agent_name)
+    return response
 
 
 async def create_inbound_trunk(
@@ -47,12 +91,10 @@ async def create_inbound_trunk(
     name: str = "visitor-trunk",
 ) -> Any:
     """
-    创建 SIP inbound trunk。
+    自带号码路径（Twilio / 阿里云）：创建 SIP inbound trunk。
 
-    provider 对应关系：
-    - demo / LiveKit Phone Numbers：allowed_ips=None（LiveKit 托管，无需 IP 白名单）
-    - demo / Twilio：allowed_ips=TWILIO_SIP_IPS
-    - china_landing / 阿里云：allowed_ips=ALIYUN_SIP_IPS（落地时替换）
+    - Twilio: allowed_ips=TWILIO_SIP_IPS
+    - 阿里云: allowed_ips=ALIYUN_SIP_IPS（china_landing 落地时填入）
     """
     trunk = SIPInboundTrunkInfo(
         name=name,
@@ -74,13 +116,9 @@ async def create_dispatch_rule(
     room_prefix: str = "call-",
 ) -> Any:
     """
-    创建 SIP dispatch rule：每路来电 → 独立 room → 显式 dispatch agent_name。
+    自带号码路径（Twilio / 阿里云）：创建绑定到特定 trunk 的 dispatch rule。
 
-    agent_name 必须与 WorkerOptions(agent_name=...) 完全一致。
-
-    china_landing 替换说明：
-      - trunk_id 换成阿里云 SIP trunk 的 id（create_inbound_trunk 返回值中的 sip_trunk_id）
-      - agent_name / room_prefix 不变（业务逻辑与 SIP provider 无关）
+    china_landing 替换说明：trunk_id 换成阿里云 trunk 的 sip_trunk_id，其余不变。
     """
     rule_info = SIPDispatchRuleInfo(
         name="visitor-dispatch",
@@ -103,21 +141,33 @@ async def create_dispatch_rule(
     response = await lkapi.sip.create_sip_dispatch_rule(
         CreateSIPDispatchRuleRequest(dispatch_rule=rule_info)
     )
-    logger.info(
-        "created dispatch rule: id=%s  agent=%s",
-        response.sip_dispatch_rule_id,
-        agent_name,
-    )
+    logger.info("created dispatch rule: id=%s  agent=%s", response.sip_dispatch_rule_id, agent_name)
     return response
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 删除操作
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def delete_trunk(lkapi: Any, trunk_id: str) -> None:
+    await lkapi.sip.delete_sip_trunk(DeleteSIPTrunkRequest(sip_trunk_id=trunk_id))
+    logger.info("deleted trunk: %s", trunk_id)
+
+
+async def delete_dispatch_rule(lkapi: Any, rule_id: str) -> None:
+    await lkapi.sip.delete_sip_dispatch_rule(DeleteSIPDispatchRuleRequest(sip_dispatch_rule_id=rule_id))
+    logger.info("deleted dispatch rule: %s", rule_id)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 查询操作
+# ─────────────────────────────────────────────────────────────────────────────
+
 async def list_trunks(lkapi: Any) -> list[Any]:
-    """列出所有已配置的 SIP inbound trunk（用于调试和幂等检查）。"""
     response = await lkapi.sip.list_sip_inbound_trunk(ListSIPInboundTrunkRequest())
     return list(response.items)
 
 
 async def list_dispatch_rules(lkapi: Any) -> list[Any]:
-    """列出所有已配置的 SIP dispatch rule（用于调试和幂等检查）。"""
     response = await lkapi.sip.list_sip_dispatch_rule(ListSIPDispatchRuleRequest())
     return list(response.items)
