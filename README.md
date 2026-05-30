@@ -58,26 +58,64 @@ docs/               # 架构决策记录
 
 ## 部署步骤
 
+### 1. 安装依赖
+
 ```bash
-# 1. 安装依赖
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -e ".[dev]"
-
-# 2. 配置环境变量
-cp .env.example .env
-# 编辑 .env，填写 VOICE_PROFILE 及对应 provider 密钥
-
-# 3. 初始化数据库
-# TODO: python scripts/init_db.py
-
-# 4. 配置 SIP Trunk
-# TODO: python scripts/setup_sip_trunk.py
-
-# 5. 启动 Agent Worker
-bash scripts/start_dev.sh
-# 或：voice-agent
 ```
 
-> **TODO**：补充 Docker Compose 一键启动、生产环境 PostgreSQL 迁移步骤、阿里云 SIP 完整配置流程。
+### 2. 配置环境变量
+
+```bash
+cp .env.example .env
+# 编辑 .env：填写 LIVEKIT_* 和 OPENAI_API_KEY（demo profile）
+```
+
+### 3. 配置 SIP Trunk（一次性）
+
+**demo — LiveKit Phone Numbers（推荐，最快）**
+1. 在 LiveKit Cloud 控制台申请一个电话号码（Phone Numbers → Buy Number）
+2. 运行配置脚本：
+   ```bash
+   python scripts/setup_sip_trunk.py --provider livekit
+   # 脚本会自动读取 .env 中的 TWILIO_PHONE_NUMBER / LIVEKIT 凭证
+   ```
+
+**demo — Twilio Elastic SIP Trunk（备选）**
+1. 在 Twilio 控制台创建 Elastic SIP Trunk，设置 Origination URI 指向 LiveKit SIP 地址
+2. 将 Twilio 号码填入 `.env` 的 `TWILIO_PHONE_NUMBER`
+3. `python scripts/setup_sip_trunk.py --provider twilio`
+
+查看已创建的 trunk 和 rule：
+```bash
+python scripts/setup_sip_trunk.py --list
+```
+
+**china_landing — 阿里云 SIP（落地时替换）**
+见 [src/telephony/trunks/aliyun.md](src/telephony/trunks/aliyun.md)，`--provider aliyun`
+
+### 4. 初始化数据库
+
+```bash
+# TODO: python scripts/init_db.py
+```
+
+### 5. 启动 Agent Worker
+
+```bash
+# 开发模式（自动重载）
+bash scripts/start_dev.sh
+
+# 或手动
+source .venv/bin/activate
+python -m src.agent.worker dev
+```
+
+Worker 启动后会连接 LiveKit server，注册 `visitor-agent`，等待来电 dispatch。
+
+> **TODO**：补充 Docker Compose 一键启动、生产环境 PostgreSQL 迁移步骤。
 
 ---
 

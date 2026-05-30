@@ -1,1 +1,11 @@
-# profile 枚举与选择逻辑：根据 VOICE_PROFILE 环境变量返回对应的语音栈 profile 模块
+from enum import Enum
+
+
+class Profile(str, Enum):
+    DEMO = "demo"
+    CHINA_LANDING = "china_landing"
+
+
+def get_profile() -> Profile:
+    from src.config.settings import get_settings
+    return Profile(get_settings().voice_profile)
