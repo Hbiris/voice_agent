@@ -42,13 +42,14 @@ class TestWechatPayload:
 
     @pytest.mark.asyncio
     async def test_sends_post_when_url_configured(self):
-        """WECHAT_WEBHOOK_URL 已设置时应 POST 到该地址。"""
+        """WECHAT_WEBHOOK_URL 已设置时应 POST 到该地址，errcode=0 视为成功。"""
         from src.tools.wechat import push_wechat
 
         ts = datetime(2026, 6, 2, 10, 30, 0)
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = MagicMock(return_value={"errcode": 0, "errmsg": "ok"})
 
         with patch("src.tools.wechat.get_settings") as mock_settings:
             mock_settings.return_value.wechat_webhook_url = "https://example.com/webhook"
@@ -65,6 +66,28 @@ class TestWechatPayload:
         assert call_args.args[0] == "https://example.com/webhook"
         payload = call_args.kwargs["json"]
         assert payload["msgtype"] == "markdown"
+
+    @pytest.mark.asyncio
+    async def test_raises_on_wechat_errcode(self):
+        """企业微信返回 errcode != 0 时应抛出 RuntimeError（HTTP 200 不代表成功）。"""
+        from src.tools.wechat import push_wechat
+
+        ts = datetime(2026, 6, 2, 10, 30, 0)
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json = MagicMock(return_value={"errcode": 93000, "errmsg": "invalid webhook url"})
+
+        with patch("src.tools.wechat.get_settings") as mock_settings:
+            mock_settings.return_value.wechat_webhook_url = "https://example.com/webhook"
+            with patch("httpx.AsyncClient") as MockClient:
+                mock_client = AsyncMock()
+                mock_client.post = AsyncMock(return_value=mock_resp)
+                MockClient.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                MockClient.return_value.__aexit__ = AsyncMock(return_value=False)
+
+                with pytest.raises(RuntimeError, match="errcode=93000"):
+                    await push_wechat("粤B12345", "测试科技", "13800138000", "商务洽谈", ts)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

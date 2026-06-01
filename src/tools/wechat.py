@@ -50,5 +50,10 @@ async def push_wechat(
 
     async with httpx.AsyncClient(timeout=5.0) as client:
         resp = await client.post(webhook_url, json=payload)
-        resp.raise_for_status()
-        logger.info("WeChat push OK: status=%d", resp.status_code)
+        resp.raise_for_status()  # 捕获真实 HTTP 错误（非 200）
+        body = resp.json()
+        errcode = body.get("errcode", -1)
+        if errcode != 0:
+            errmsg = body.get("errmsg", "unknown")
+            raise RuntimeError(f"WeChat webhook rejected: errcode={errcode} errmsg={errmsg}")
+        logger.info("WeChat push OK: errcode=0")
