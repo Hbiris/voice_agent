@@ -103,13 +103,31 @@ python scripts/setup_sip_trunk.py --list
 **china_landing — 阿里云 SIP（落地时替换）**
 见 [src/telephony/trunks/aliyun.md](src/telephony/trunks/aliyun.md)，`--provider aliyun`
 
-### 4. 初始化数据库
+### 4. 配置企业微信 Webhook
 
+**获取 Webhook URL（两步）：**
+1. 在企业微信中创建一个群（或进入已有的保安通知群）
+2. 群设置 → 添加群机器人 → 新建机器人 → 复制 Webhook 地址
+3. 填入 `.env`：`WECHAT_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx`
+
+> **未配置 Webhook 时**：系统自动 dry-run，把消息内容打印到日志，不发网络请求。本地测试无需真实 Webhook 也能验证全闭环。
+
+### 5. 初始化数据库
+
+数据库在 worker 首次启动时**自动建表**（SQLite 无需额外操作）。
+
+手动验证闭环（无需拨打电话）：
 ```bash
-# TODO: python scripts/init_db.py
+python scripts/test_registration.py
+# 可选参数：--plate 粤B12345 --company 公司名 --phone 13800000000 --purpose 事由
+```
+输出示例：
+```
+✓ 登记成功  DB record_id = 1
+✓ DB 验证  plate=粤B88888  arrived_at=2026-06-02 15:54:26
 ```
 
-### 5. 启动 Agent Worker
+### 6. 启动 Agent Worker
 
 ```bash
 # 开发模式（自动重载）
@@ -120,7 +138,7 @@ source .venv/bin/activate
 python -m src.agent.worker dev
 ```
 
-Worker 启动后会连接 LiveKit server，注册 `visitor-agent`，等待来电 dispatch。
+Worker 启动后会连接 LiveKit server，注册 `visitor-agent`，等待来电 dispatch。**数据库表在此时自动创建**，无需提前初始化。
 
 > **TODO**：补充 Docker Compose 一键启动、生产环境 PostgreSQL 迁移步骤。
 
@@ -146,7 +164,9 @@ Worker 启动后会连接 LiveKit server，注册 `visitor-agent`，等待来电
 | `CHINA_LLM_MODEL` | china | 模型名称（如 `qwen-plus`） |
 | `CHINA_ASR_APPKEY` | china | 国内 ASR AppKey |
 | `CHINA_TTS_APPKEY` | china | 国内 TTS AppKey |
-| `DATABASE_URL` | 可选 | 留空用 SQLite；填 PostgreSQL DSN 用于生产 |
-| `WECHAT_WEBHOOK_URL` | ✅ | 企业微信 Webhook 地址 |
+| `DATABASE_URL` | 可选 | 留空用 SQLite（`data/visitors.db`）；填 `postgresql+asyncpg://...` 用于生产 |
+| `WECHAT_WEBHOOK_URL` | 可选* | 企业微信群机器人 Webhook；未填时 dry-run 打日志 |
+
+> *`WECHAT_WEBHOOK_URL` 未配置时系统正常运行，消息输出到日志。
 
 完整示例见 [.env.example](.env.example)。

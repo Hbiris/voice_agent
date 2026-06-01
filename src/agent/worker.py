@@ -3,7 +3,8 @@ import logging
 from livekit import agents
 from livekit.agents import AgentSession, Agent, JobContext, RoomInputOptions
 
-from src.agent.prompt import GREETING, VISITOR_SYSTEM_PROMPT
+from src.agent.prompt import GREETING_INSTRUCTION, VISITOR_SYSTEM_PROMPT
+from src.tools.visitor import submit_visitor_registration
 from src.voice.factory import build_voice_kwargs
 
 logger = logging.getLogger(__name__)
@@ -12,11 +13,18 @@ logger = logging.getLogger(__name__)
 async def entrypoint(ctx: JobContext) -> None:
     logger.info("incoming call → room=%s", ctx.room.name)
 
+    # 建表（幂等），在连接 room 前完成，不占 25 秒通话预算
+    from src.data.database import init_db
+    await init_db()
+
     await ctx.connect()
 
     voice_kwargs = build_voice_kwargs()
     session = AgentSession(**voice_kwargs)
-    agent = Agent(instructions=VISITOR_SYSTEM_PROMPT)
+    agent = Agent(
+        instructions=VISITOR_SYSTEM_PROMPT,
+        tools=[submit_visitor_registration],
+    )
 
     await session.start(
         agent,
@@ -24,10 +32,8 @@ async def entrypoint(ctx: JobContext) -> None:
         room_input_options=RoomInputOptions(),
     )
 
-    # 主动问候，让访客感知到 Agent 已接通
-    await session.generate_reply(
-    instructions="用中文向访客问好，说明这里是园区访客登记，并询问车牌号和来访哪家公司"
-)
+    # 接通后主动开口，一句话问 3 项（车牌 + 单位 + 事由），让对话自然展开
+    await session.generate_reply(instructions=GREETING_INSTRUCTION)
 
     logger.info("session live, waiting for caller input")
 

@@ -5,9 +5,9 @@ from unittest.mock import patch, MagicMock
 
 class TestPrompt:
     def test_greeting_not_empty(self):
-        from src.agent.prompt import GREETING
-        assert len(GREETING) > 10
-        assert "您好" in GREETING
+        from src.agent.prompt import GREETING_INSTRUCTION
+        assert len(GREETING_INSTRUCTION) > 10
+        assert "中文" in GREETING_INSTRUCTION or "访客" in GREETING_INSTRUCTION
 
     def test_system_prompt_contains_required_fields(self):
         from src.agent.prompt import VISITOR_SYSTEM_PROMPT
