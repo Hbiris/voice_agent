@@ -178,3 +178,55 @@ class TestSubmitToolStructure:
     def test_tool_description_not_empty(self):
         from src.tools.visitor import submit_visitor_registration
         assert len(submit_visitor_registration.info.description) > 10
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 反编造校验
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTranscriptEvidence:
+    def _check(self, transcripts, plate="粤D88888", company="蓝色鲸鱼", phone="13912345678", purpose="送货"):
+        from src.tools.visitor import _check_transcript_evidence
+        return _check_transcript_evidence(transcripts, plate, company, phone, purpose)
+
+    def test_valid_passes(self):
+        """正常通话转写，4 项全部通过。"""
+        transcripts = ["粤D88888来找蓝色鲸鱼送货", "手机13912345678"]
+        assert self._check(transcripts) == []
+
+    def test_empty_transcripts_rejects_all(self):
+        """转写为空（用户没说过话）→ 拒绝所有字段。"""
+        fails = set(self._check([]))
+        assert fails == {"plate", "phone", "company", "purpose"}
+
+    def test_missing_plate_rejects_plate_only(self):
+        """转写里没有车牌格式 → 只拒绝 plate。"""
+        transcripts = ["来找蓝色鲸鱼送货", "手机13912345678"]
+        fails = self._check(transcripts)
+        assert "plate" in fails
+        assert "phone" not in fails
+
+    def test_asr_homophone_plate_passes(self):
+        """ASR 同音错字如 '月D88888'（月→粤）→ 格式仍匹配，不拒绝。"""
+        transcripts = ["月D88888来找公司", "13912345678"]
+        fails = self._check(transcripts)
+        assert "plate" not in fails
+
+    def test_plate_suffix_fallback_passes(self):
+        """转写里出现提交车牌的字母+数字后缀（如 D88888）→ 备用规则放行。"""
+        transcripts = ["我的车是D88888", "手机13912345678"]
+        fails = self._check(transcripts)
+        assert "plate" not in fails
+
+    def test_missing_phone_rejects_phone_only(self):
+        """转写里没有 11 位数字 → 只拒绝 phone。"""
+        transcripts = ["粤D88888来找蓝色鲸鱼送货"]
+        fails = self._check(transcripts)
+        assert "phone" in fails
+        assert "plate" not in fails
+
+    def test_phone_with_spaces_passes(self):
+        """ASR 在数字间加空格（如 '139 1234 5678'）→ 去空格后 11 位，放行。"""
+        transcripts = ["粤D88888", "手机139 1234 5678"]
+        fails = self._check(transcripts)
+        assert "phone" not in fails

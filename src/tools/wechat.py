@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime
 
 import httpx
@@ -41,9 +42,12 @@ async def push_wechat(
     payload = _build_payload(plate, company, phone, purpose, arrived_at)
     webhook_url = get_settings().wechat_webhook_url
 
+    t0 = time.perf_counter()
+
     if not webhook_url:
         logger.info(
-            "[dry-run] WeChat push (WECHAT_WEBHOOK_URL not set):\n%s",
+            "[dry-run] WeChat push (WECHAT_WEBHOOK_URL not set) [%.0fms]:\n%s",
+            (time.perf_counter() - t0) * 1000,
             payload["markdown"]["content"],
         )
         return
@@ -56,4 +60,4 @@ async def push_wechat(
         if errcode != 0:
             errmsg = body.get("errmsg", "unknown")
             raise RuntimeError(f"WeChat webhook rejected: errcode={errcode} errmsg={errmsg}")
-        logger.info("WeChat push OK: errcode=0")
+        logger.info("WeChat push OK: errcode=0 [%.0fms]", (time.perf_counter() - t0) * 1000)

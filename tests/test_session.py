@@ -11,7 +11,7 @@ class TestPrompt:
 
     def test_system_prompt_contains_required_fields(self):
         from src.agent.prompt import VISITOR_SYSTEM_PROMPT
-        for field in ["车牌号", "来访单位", "手机号", "来访事由"]:
+        for field in ["车牌号", "单位", "手机号", "事由"]:
             assert field in VISITOR_SYSTEM_PROMPT, f"Missing field in prompt: {field}"
 
     def test_system_prompt_not_empty(self):
