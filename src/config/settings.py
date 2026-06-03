@@ -17,7 +17,12 @@ class Settings(BaseSettings):
     livekit_api_key: str = ""
     livekit_api_secret: str = ""
 
-    # ── OpenAI（demo profile）────────────────────────────────
+    # ── demo A/B 切换 ──────────────────────────────────────────
+    # realtime: OpenAI Realtime 一体化（默认）
+    # cascaded: Paraformer STT + Qwen LLM + CosyVoice TTS（阿里云三件套）
+    demo_voice_mode: str = "realtime"
+
+    # ── OpenAI（demo / realtime 模式）───────────────────────
     openai_api_key: str = ""
 
     # ── SIP trunk: demo / Twilio（备选）─────────────────────
@@ -41,6 +46,17 @@ class Settings(BaseSettings):
     china_asr_token: str = ""
     china_tts_appkey: str = ""
     china_tts_token: str = ""
+
+    # ── DashScope（cascaded 模式：Paraformer STT + Qwen LLM + CosyVoice TTS）──
+    dashscope_api_key: str = ""
+    # LLM 端点：默认北京；国际版填 https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    dashscope_llm_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    dashscope_llm_model: str = "qwen-plus"
+    # CosyVoice v2 音色：longcheng / longhua / longxiaochun / longnan 等
+    dashscope_tts_voice: str = "longcheng"
+    dashscope_stt_model: str = "paraformer-realtime-v2"
+    # 热词表 ID（DashScope 控制台预创建）；留空则不启用
+    dashscope_stt_vocabulary_id: str = ""
 
     # ── 数据库 ────────────────────────────────────────────────
     database_url: str = ""

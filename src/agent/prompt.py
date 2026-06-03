@@ -29,8 +29,11 @@ VISITOR_SYSTEM_PROMPT = """\
 - 4 项未齐全前不调用工具。
 """
 
-# 接通后由 worker 通过 generate_reply 触发的首句问候指令
+# Realtime 模式：generate_reply 触发首句问候（LLM 自由生成）
 GREETING_INSTRUCTION = (
     "用中文简短问好，"
     "一句话同时问：车牌号、来访哪家公司、什么事。"
 )
+
+# Cascaded 模式：session.say() 固定文本直接走 TTS，跳过 LLM round-trip
+CASCADED_GREETING = "您好，麻烦说一下：车牌号、来找哪家公司、什么事？"

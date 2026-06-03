@@ -13,7 +13,7 @@ from livekit.agents.voice.events import (
     UserInputTranscribedEvent,
 )
 
-from src.agent.prompt import GREETING_INSTRUCTION, VISITOR_SYSTEM_PROMPT
+from src.agent.prompt import CASCADED_GREETING, GREETING_INSTRUCTION, VISITOR_SYSTEM_PROMPT
 from src.tools.visitor import submit_visitor_registration
 from src.voice.factory import build_voice_kwargs
 
@@ -109,7 +109,13 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     # 接通后主动开口，一句话问 3 项（车牌 + 单位 + 事由），让对话自然展开
-    await session.generate_reply(instructions=GREETING_INSTRUCTION)
+    # cascaded 模式：session.say() 固定文本直接走 CosyVoice TTS，跳过 LLM round-trip
+    # realtime 模式：generate_reply(instructions=...) 让 Realtime 模型自由生成问候
+    from src.config.settings import get_settings
+    if get_settings().demo_voice_mode == "cascaded":
+        await session.say(CASCADED_GREETING, add_to_chat_ctx=True)
+    else:
+        await session.generate_reply(instructions=GREETING_INSTRUCTION)
     timer.t_greeting = time.perf_counter()
     logger.info(
         "[timing] greeting sent [%.0fms after connect]",
