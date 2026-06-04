@@ -74,6 +74,7 @@ def _build_cascaded(settings) -> dict[str, Any]:
             voice=settings.dashscope_tts_voice,
             api_key=api_key,
             sample_rate=24000,
+            rate=settings.dashscope_tts_rate,
         ),
         # 端点延迟微调：等待用户停顿 ≥0.5s 再截断，避免打断车牌/手机号中途停顿
         "min_endpointing_delay": 0.5,

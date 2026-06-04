@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     dashscope_llm_model: str = "qwen-plus"
     # CosyVoice v2 音色：longcheng / longhua / longxiaochun / longnan 等
     dashscope_tts_voice: str = "longcheng"
+    # 语速倍率：0.5–2.0，1.0=正常，1.1–1.2=略快利索，超 1.3 会失真
+    dashscope_tts_rate: float = 1.1
     dashscope_stt_model: str = "paraformer-realtime-v2"
     # 热词表 ID（DashScope 控制台预创建）；留空则不启用
     dashscope_stt_vocabulary_id: str = ""
