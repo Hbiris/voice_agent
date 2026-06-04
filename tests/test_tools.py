@@ -219,7 +219,7 @@ class TestTranscriptEvidence:
         assert "plate" not in fails
 
     def test_missing_phone_rejects_phone_only(self):
-        """转写里没有 11 位数字 → 只拒绝 phone。"""
+        """转写里完全没有数字段（来电者没报号）→ 只拒绝 phone。"""
         transcripts = ["粤D88888来找蓝色鲸鱼送货"]
         fails = self._check(transcripts)
         assert "phone" in fails
@@ -230,3 +230,34 @@ class TestTranscriptEvidence:
         transcripts = ["粤D88888", "手机139 1234 5678"]
         fails = self._check(transcripts)
         assert "phone" not in fails
+
+    def test_phone_with_dashes_passes(self):
+        """ASR 用连字符分段（如 '133-1234-1234'）→ 归一化后子串匹配，放行。"""
+        transcripts = ["粤D88888", "我手机是133-1234-1234"]
+        fails = self._check(transcripts, phone="13312341234")
+        assert "phone" not in fails
+
+    def test_phone_chinese_digits_passes(self):
+        """ASR 输出中文数字（如 '一三三一二三四一二三四'）→ 归一化后子串匹配，放行。"""
+        transcripts = ["粤D88888", "手机一三三一二三四一二三四"]
+        fails = self._check(transcripts, phone="13312341234")
+        assert "phone" not in fails
+
+    def test_phone_yao_digit_passes(self):
+        """ASR 用'幺'代替'一'（如 '幺三三…'）→ 幺→1 转换后放行。"""
+        transcripts = ["粤D88888", "幺三三 幺二三四 幺二三四"]
+        fails = self._check(transcripts, phone="13312341234")
+        assert "phone" not in fails
+
+    def test_phone_stt_error_still_passes(self):
+        """STT 把号码听错几位（转写 13987654321，LLM 提交 13312341234）→ 存在性满足，放行。
+        只拦"凭空捏造"，不拦"STT 听岔"。"""
+        transcripts = ["粤D88888", "手机13987654321"]
+        fails = self._check(transcripts, phone="13312341234")
+        assert "phone" not in fails
+
+    def test_phone_no_digits_at_all_rejects(self):
+        """转写里完全没有足够长的数字段（来电者没报号）→ 拒绝 phone。"""
+        transcripts = ["来找蓝色鲸鱼送货", "手机号稍后告诉你"]
+        fails = self._check(transcripts, phone="13912341234")
+        assert "phone" in fails

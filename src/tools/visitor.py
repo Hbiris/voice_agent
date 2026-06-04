@@ -10,10 +10,28 @@ logger = logging.getLogger(__name__)
 # ── 反编造校验 ──────────────────────────────────────────────────────────────────
 # CJK字 + 字母 + 4~5位字母数字 = 标准车牌格式，允许 ASR 同音错字（"月"代"粤"等）
 _PLATE_RE = re.compile(r"[一-鿿][A-Za-z][A-Za-z0-9]{4,5}")
-# 11位以上连续数字（strip空格后）= 手机号
-_PHONE_RE = re.compile(r"\d{11,}")
+
+# 中文数字 → 阿拉伯数字的字符映射表（用于手机号归一化）
+_ZH_DIGIT_TABLE = str.maketrans(
+    "零〇一壹幺二贰两三叁四肆五伍六陆七柒八捌九玖",
+    "0011122233445566778899",
+)
+
+
+def _normalize_digits(text: str) -> str:
+    """中文数字转阿拉伯数字，再去掉所有非数字字符，返回纯数字串。
+
+    处理 STT 常见格式：
+      - 连字符/空格分隔："133-1234-1234" / "133 1234 1234" → "13312341234"
+      - 中文数字："一三三一二三四一二三四" → "13312341234"
+      - 幺："幺三三…" → "133…"（幺=1）
+    """
+    return re.sub(r"\D", "", text.translate(_ZH_DIGIT_TABLE))
 
 _FIELD_NAMES = {"plate": "车牌号", "phone": "手机号", "company": "来访单位", "purpose": "来访事由"}
+
+
+_PHONE_DIGITS_RE = re.compile(r"\d{7,}")
 
 
 def _check_transcript_evidence(
@@ -27,13 +45,16 @@ def _check_transcript_evidence(
     反编造校验：检查每个字段在来电者转写里有无来源证据。
     返回缺证据的字段名列表（空列表表示全部通过）。
 
-    使用存在性/pattern 判定，而非精确字符串匹配，因此允许 ASR 纠错：
+    原则：只挡"凭空捏造"（转写里该类信息完全没有），不挡"STT 听岔"
+    （转写里有、但某位数字被识别错误）。
+
     - 车牌：转写里出现"汉字+字母+4~5位字母数字"的车牌格式即视为有证据
-           （即使省份字同音写错如"月D88888"，格式仍匹配）。
+           （省份字同音写错如"月D88888"格式仍匹配）。
            备用：提交车牌的字母+数字后缀（如 "D88888"）出现在转写中。
-    - 手机：转写去空格后出现 11 位以上连续数字即视为有证据。
-    - 来访单位/事由：只要转写非空（来电者说过话），不做更严格的词汇匹配
-           （LLM 可能从语义中提炼，精确匹配会误杀合理推断）。
+    - 手机：把转写里所有文字归一化为数字串（含中文数字转换），只要存在
+           连续 ≥7 位的数字段（说明来电者确实报了号），即放行；
+           不做精确子串匹配，因为 STT 偶尔会错几位。
+    - 来访单位/事由：转写非空（来电者说过话）即视为有证据。
     """
     combined = " ".join(transcripts).strip()
     combined_nospace = combined.replace(" ", "")
@@ -49,8 +70,14 @@ def _check_transcript_evidence(
         if not (suffix_m and suffix_m.group().upper() in combined_nospace.upper()):
             failures.append("plate")
 
-    # 手机
-    if not _PHONE_RE.search(combined_nospace):
+    # 手机：存在性判断——转写归一化数字串中有 ≥7 位连续数字即证明来电者报过号
+    norm_transcript = _normalize_digits(combined)
+    norm_phone = _normalize_digits(phone)
+    logger.debug(
+        "[anti-fab phone] transcript_digits=%r  submitted_digits=%r",
+        norm_transcript, norm_phone,
+    )
+    if not norm_phone or not _PHONE_DIGITS_RE.search(norm_transcript):
         failures.append("phone")
 
     # 来访单位/事由：转写非空已由上方 len(combined) >= 2 保证
