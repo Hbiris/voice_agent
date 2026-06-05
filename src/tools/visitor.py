@@ -90,6 +90,7 @@ async def _do_registration(
     company: str,
     phone: str,
     purpose: str,
+    caller_id: str | None = None,
 ) -> int:
     """
     核心业务逻辑（无 LiveKit 依赖）：写数据库 + 推送企业微信。
@@ -112,6 +113,7 @@ async def _do_registration(
             phone=phone,
             purpose=purpose,
             arrived_at=arrived_at,
+            caller_id=caller_id,
         )
         session.add(record)
         await session.commit()
@@ -147,6 +149,7 @@ async def submit_visitor_registration(
     company: str,
     phone: str,
     purpose: str,
+    reused_from_caller_history: bool = False,
 ) -> str:
     """登记访客信息。4 项信息全部确认后立即调用，不要等通话结束。
 
@@ -155,6 +158,8 @@ async def submit_visitor_registration(
         company (str): 来访单位名称
         phone (str): 联系手机号，11位数字
         purpose (str): 来访事由
+        reused_from_caller_history (bool): 回访复用历史记录时设为 True（来电者已口头确认上次信息
+            不变，四项值直接取历史记录）；跳过"本次转写要有该值"的反编造检查。首次来访保持 False。
     """
     t_tool = time.perf_counter()
 
@@ -174,18 +179,27 @@ async def submit_visitor_registration(
         )
 
     # ── 反编造校验 ─────────────────────────────────────────────────────────────
-    transcripts = timer.transcripts if timer is not None else []
-    failures = _check_transcript_evidence(transcripts, plate, company, phone, purpose)
-    if failures:
-        missing = "、".join(_FIELD_NAMES[f] for f in failures)
-        logger.warning(
-            "anti-fabrication REJECTED: fields=%s  plate=%r phone=%r transcripts=%r",
-            failures, plate, phone, transcripts,
+    # 历史复用路径：值来自数据库记录 + 来电者口头确认，不要求本次转写包含该值
+    if reused_from_caller_history:
+        logger.info(
+            "anti-fabrication SKIPPED (reused_from_caller_history) plate=%r phone=%r",
+            plate, phone,
         )
-        return f"校验未通过：{missing}在通话转写中无来源证据，请重新向来电者确认这些信息。"
+    else:
+        transcripts = timer.transcripts if timer is not None else []
+        failures = _check_transcript_evidence(transcripts, plate, company, phone, purpose)
+        if failures:
+            missing = "、".join(_FIELD_NAMES[f] for f in failures)
+            logger.warning(
+                "anti-fabrication REJECTED: fields=%s  plate=%r phone=%r transcripts=%r",
+                failures, plate, phone, transcripts,
+            )
+            return f"校验未通过：{missing}在通话转写中无来源证据，请重新向来电者确认这些信息。"
+
+    caller_id = timer.caller_id if timer is not None else None
 
     try:
-        record_id = await _do_registration(plate, company, phone, purpose)
+        record_id = await _do_registration(plate, company, phone, purpose, caller_id=caller_id)
         t_done = time.perf_counter()
         server_ms = (t_done - t_tool) * 1000
         logger.info(

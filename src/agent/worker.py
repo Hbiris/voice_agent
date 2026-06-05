@@ -1,6 +1,8 @@
 import logging
+import re
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 
 from livekit import agents
 from livekit.agents import AgentSession, Agent, JobContext, RoomInputOptions
@@ -19,15 +21,85 @@ from src.voice.factory import build_voice_kwargs
 
 logger = logging.getLogger(__name__)
 
+# room name 里主叫号码部分：下划线前的 +86XXXXXXXXXXX 或 XXXXXXXXXXX
+_CALLER_PART_RE = re.compile(r"(\+?\d+)_")
+
 
 @dataclass
 class CallTimer:
     t_connected: float = field(default_factory=time.perf_counter)
     t_greeting: float = 0.0
-    t_tool_submitted: float = 0.0   # set by submit_visitor_registration
-    t_wechat_sent: float = 0.0      # set by submit_visitor_registration after push_wechat
-    ai_ttfts: list[float] = field(default_factory=list)  # RealtimeModelMetrics.ttft per turn
-    transcripts: list[str] = field(default_factory=list)  # final caller transcripts for anti-fabrication check
+    t_tool_submitted: float = 0.0    # set by submit_visitor_registration
+    t_wechat_sent: float = 0.0       # set by submit_visitor_registration after push_wechat
+    ai_ttfts: list[float] = field(default_factory=list)
+    transcripts: list[str] = field(default_factory=list)
+    caller_id: str | None = None     # normalized 11-digit caller number
+
+
+def _parse_caller_id(room_name: str) -> str | None:
+    """从 room name 解析并规范化主叫号码为 11 位。
+
+    格式示例：+8618983280231_abc123 / call-+8618983280231_abc / 18983280231_xyz
+    规则：取下划线前的数字串；若为 13 位且以 86 开头则去掉前缀；11 位且以 1 开头则有效。
+    """
+    m = _CALLER_PART_RE.search(room_name)
+    if not m:
+        return None
+    digits = re.sub(r"\D", "", m.group(1))
+    if len(digits) == 13 and digits.startswith("86"):
+        digits = digits[2:]
+    if len(digits) == 11 and digits[0] == "1":
+        return digits
+    return None
+
+
+def _friendly_date(dt: datetime) -> str:
+    days_ago = (datetime.now().date() - dt.date()).days
+    if days_ago == 0:
+        return "今天早些时候"
+    if days_ago == 1:
+        return "昨天"
+    return f"{dt.month}月{dt.day}日"
+
+
+def _returning_visitor_context(last_visit) -> tuple[str, str, str]:
+    """构建回访场景的三元素：(system_prompt_addition, cascaded_greeting, realtime_instruction)。"""
+    date_str = _friendly_date(last_visit.arrived_at)
+    p = last_visit.plate
+    c = last_visit.company
+    pu = last_visit.purpose
+    ph = last_visit.phone
+
+    prompt_addition = f"""
+
+━━ 回访识别·老访客 ━━
+来电者是回头客，上次（{date_str}）登记如下：
+  车牌：{p}  单位：{c}  事由：{pu}  手机：{ph}
+
+【第 1 轮（替换常规开场）】
+一句话确认是否沿用上次信息。
+参考：「您好，看着{date_str}您来过，今天还是开{p}来{c}{pu}吗？」
+
+【来电者确认（"对"/"是"/"一样"/"嗯"/"没变"等）】
+→ 立即调用 submit_visitor_registration，填入上次四项原值，reused_from_caller_history=True。
+→ 无需追问任何字段，目标 ≤ 2 轮完成。
+
+【来电者说有变化】
+→ 只追问发生变化的字段，其余沿用上次值，reused_from_caller_history=False。
+"""
+
+    cascaded_greeting = (
+        f"您好，看着{date_str}您来过，"
+        f"今天还是开{p}来{c}{pu}吗？"
+    )
+
+    realtime_instruction = (
+        f"用亲切口语问好，一句话确认来电者是否沿用上次（{date_str}）来访信息："
+        f"车牌{p}、{c}、{pu}。"
+        f"参考：「您好，看着{date_str}您来过，今天还是开{p}来{c}{pu}吗？」"
+    )
+
+    return prompt_addition, cascaded_greeting, realtime_instruction
 
 
 def _handle_user_transcript(timer: CallTimer, ev: UserInputTranscribedEvent) -> None:
@@ -86,8 +158,34 @@ async def entrypoint(ctx: JobContext) -> None:
     await init_db()
 
     await ctx.connect()
-    timer = CallTimer()  # t_connected 记录在此刻
+
+    # ── 解析主叫号码，查询回访记录 ──────────────────────────────────────────────
+    caller_id = _parse_caller_id(ctx.room.name)
+    last_visit = None
+    if caller_id:
+        from src.data.query import get_last_visit_by_caller
+        last_visit = await get_last_visit_by_caller(caller_id)
+        if last_visit:
+            logger.info(
+                "[returning visitor] caller=%s last_id=%s arrived=%s",
+                caller_id, last_visit.id, last_visit.arrived_at,
+            )
+        else:
+            logger.info("[new visitor] caller=%s", caller_id)
+    else:
+        logger.info("[unknown caller] room=%s (no phone in room name)", ctx.room.name)
+
+    timer = CallTimer(caller_id=caller_id)
     logger.info("[timing] call connected")
+
+    # ── 构建指令和问候语（回访 vs 首访） ────────────────────────────────────────
+    if last_visit:
+        prompt_addition, greeting_cascaded, greeting_realtime = _returning_visitor_context(last_visit)
+        instructions = VISITOR_SYSTEM_PROMPT + prompt_addition
+    else:
+        instructions = VISITOR_SYSTEM_PROMPT
+        greeting_cascaded = CASCADED_GREETING
+        greeting_realtime = GREETING_INSTRUCTION
 
     voice_kwargs = build_voice_kwargs()
     session = AgentSession(userdata=timer, **voice_kwargs)
@@ -98,7 +196,7 @@ async def entrypoint(ctx: JobContext) -> None:
     session.on("close", lambda ev: _on_close(timer, ev))
 
     agent = Agent(
-        instructions=VISITOR_SYSTEM_PROMPT,
+        instructions=instructions,
         tools=[submit_visitor_registration],
     )
 
@@ -108,14 +206,13 @@ async def entrypoint(ctx: JobContext) -> None:
         room_input_options=RoomInputOptions(),
     )
 
-    # 接通后主动开口，一句话问 3 项（车牌 + 单位 + 事由），让对话自然展开
-    # cascaded 模式：session.say() 固定文本直接走 CosyVoice TTS，跳过 LLM round-trip
-    # realtime 模式：generate_reply(instructions=...) 让 Realtime 模型自由生成问候
+    # ── 开口问候 ─────────────────────────────────────────────────────────────────
     from src.config.settings import get_settings
     if get_settings().demo_voice_mode == "cascaded":
-        await session.say(CASCADED_GREETING, add_to_chat_ctx=True)
+        await session.say(greeting_cascaded, add_to_chat_ctx=True)
     else:
-        await session.generate_reply(instructions=GREETING_INSTRUCTION)
+        await session.generate_reply(instructions=greeting_realtime)
+
     timer.t_greeting = time.perf_counter()
     logger.info(
         "[timing] greeting sent [%.0fms after connect]",
@@ -129,7 +226,6 @@ def main() -> None:
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
-            # agent_name 必须与 dispatch rule 中的 RoomAgentDispatch.agent_name 完全一致
             agent_name="visitor-agent",
         )
     )

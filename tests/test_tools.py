@@ -261,3 +261,151 @@ class TestTranscriptEvidence:
         transcripts = ["来找蓝色鲸鱼送货", "手机号稍后告诉你"]
         fails = self._check(transcripts, phone="13912341234")
         assert "phone" in fails
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 主叫号码解析
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestParseCallerId:
+    def _parse(self, room_name):
+        from src.agent.worker import _parse_caller_id
+        return _parse_caller_id(room_name)
+
+    def test_plus86_prefix(self):
+        """+8618983280231_abc → 18983280231"""
+        assert self._parse("+8618983280231_abc123") == "18983280231"
+
+    def test_sip_room_prefix(self):
+        """call-+8618983280231_abc → 18983280231"""
+        assert self._parse("call-+8618983280231_abc123") == "18983280231"
+
+    def test_bare_11_digits(self):
+        """18983280231_abc → 18983280231（已是 11 位，无需剥 86）"""
+        assert self._parse("18983280231_abc123") == "18983280231"
+
+    def test_no_underscore_returns_none(self):
+        """room name 里没有下划线 → None"""
+        assert self._parse("someopaqueroom") is None
+
+    def test_non_phone_digits_returns_none(self):
+        """下划线前只有 6 位数字 → 不满足 11 位，返回 None"""
+        assert self._parse("123456_abc") is None
+
+    def test_landline_returns_none(self):
+        """座机号（8 位，不以 1 开头）→ None"""
+        assert self._parse("87654321_abc") is None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 回访识别：DB 查询 + 反编造豁免
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestReturningVisitor:
+    """验证 get_last_visit_by_caller 和 reused_from_caller_history 豁免。"""
+
+    @pytest.mark.asyncio
+    async def test_query_returns_latest_record(self):
+        """写入两条记录，查询返回最新那条。"""
+        from unittest.mock import patch, MagicMock
+        from src.data.database import init_db, get_session_factory
+        from src.data.query import get_last_visit_by_caller
+
+        with patch("src.data.database._resolve_url", return_value="sqlite+aiosqlite:///:memory:"):
+            import src.data.database as db_mod
+            db_mod._engine = None
+            db_mod._SessionLocal = None
+            await init_db()
+
+            with patch("src.tools.wechat.get_settings") as ms:
+                ms.return_value.wechat_webhook_url = ""
+                from src.tools.visitor import _do_registration
+                await _do_registration("粤A11111", "旧公司", "13800000001", "送货", caller_id="13812345678")
+                id2 = await _do_registration("粤A22222", "新公司", "13800000001", "开会", caller_id="13812345678")
+
+            record = await get_last_visit_by_caller("13812345678")
+            assert record is not None
+            assert record.id == id2
+            assert record.plate == "粤A22222"
+
+    @pytest.mark.asyncio
+    async def test_query_returns_none_for_unknown_caller(self):
+        """未曾来过的号码 → 返回 None。"""
+        from unittest.mock import patch
+        from src.data.database import init_db
+        from src.data.query import get_last_visit_by_caller
+
+        with patch("src.data.database._resolve_url", return_value="sqlite+aiosqlite:///:memory:"):
+            import src.data.database as db_mod
+            db_mod._engine = None
+            db_mod._SessionLocal = None
+            await init_db()
+
+            result = await get_last_visit_by_caller("13999999999")
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_reused_history_bypasses_antifab(self):
+        """reused_from_caller_history=True 时，转写为空也能提交成功。"""
+        from unittest.mock import patch, MagicMock, AsyncMock
+        from src.data.database import init_db
+
+        with patch("src.data.database._resolve_url", return_value="sqlite+aiosqlite:///:memory:"):
+            import src.data.database as db_mod
+            db_mod._engine = None
+            db_mod._SessionLocal = None
+            await init_db()
+
+            with patch("src.tools.wechat.get_settings") as ms:
+                ms.return_value.wechat_webhook_url = ""
+
+                from src.tools.visitor import submit_visitor_registration
+                from src.agent.worker import CallTimer
+
+                timer = CallTimer(caller_id="13812345678")
+                # 转写为空 — 正常流程会被反编造拒绝
+
+                ctx = MagicMock()
+                ctx.userdata = timer
+
+                result = await submit_visitor_registration(
+                    ctx,
+                    plate="粤A88888",
+                    company="蓝色鲸鱼",
+                    phone="13812345678",
+                    purpose="送货",
+                    reused_from_caller_history=True,
+                )
+
+            assert "登记成功" in result
+
+    @pytest.mark.asyncio
+    async def test_normal_path_still_checked_without_flag(self):
+        """reused_from_caller_history=False（默认），转写为空时仍被反编造拒绝。"""
+        from unittest.mock import patch, MagicMock
+        from src.data.database import init_db
+
+        with patch("src.data.database._resolve_url", return_value="sqlite+aiosqlite:///:memory:"):
+            import src.data.database as db_mod
+            db_mod._engine = None
+            db_mod._SessionLocal = None
+            await init_db()
+
+            from src.tools.visitor import submit_visitor_registration
+            from src.agent.worker import CallTimer
+
+            timer = CallTimer(caller_id=None)
+            # 转写为空
+
+            ctx = MagicMock()
+            ctx.userdata = timer
+
+            result = await submit_visitor_registration(
+                ctx,
+                plate="粤A88888",
+                company="蓝色鲸鱼",
+                phone="13812345678",
+                purpose="送货",
+            )
+
+        assert "校验未通过" in result
